@@ -1,0 +1,19 @@
+{
+  "name": "surf-report-cotentin",
+  "version": "1.0.0",
+  "description": "Daily surf report for Cotentin west coast spots",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test-scraper": "node test-scraper.js",
+    "find-spots": "node find-spots.js",
+    "send-now": "node -e \"require('./src/index.js').sendReport()\""
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "dotenv": "^16.4.0",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0",
+    "puppeteer": "^23.0.0"
+  }
+}
