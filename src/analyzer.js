@@ -164,11 +164,20 @@ function analyzeSpotDay(slots, orientation) {
   // Danger max de la journée
   const maxDanger = scored.reduce((worst, sl) => sl.danger.score > worst.score ? sl.danger : worst, scored[0].danger);
 
-  // Températures
-  const temps = daySlots.filter(s => s.temperature != null).map(s => s.temperature);
-  const avgTemp = temps.length ? Math.round(temps.reduce((a, b) => a + b, 0) / temps.length) : null;
+  // Température pendant la meilleure fenêtre
+  let windowTemp = null;
+  if (bestWindow) {
+    const windowSlots = daySlots.filter(s => s.hour >= bestWindow.start && s.hour < bestWindow.end && s.temperature != null);
+    if (windowSlots.length) {
+      windowTemp = Math.round(windowSlots.reduce((a, s) => a + s.temperature, 0) / windowSlots.length);
+    }
+  }
+  if (windowTemp == null) {
+    // Fallback : température du meilleur créneau
+    windowTemp = bestSlot.temperature ?? null;
+  }
 
-  return { avgScore, bestSlot, bestWindow, maxDanger, avgTemp, daySlots: scored };
+  return { avgScore, bestSlot, bestWindow, maxDanger, windowTemp, daySlots: scored };
 }
 
 function analyzeForecasts(scrapedData) {
@@ -189,7 +198,7 @@ function analyzeForecasts(scrapedData) {
       const analysis = analyzeSpotDay(todayForecast.slots, orientation);
       if (!analysis) return null;
 
-      const { bestSlot, bestWindow, maxDanger, avgTemp } = analysis;
+      const { bestSlot, bestWindow, maxDanger, windowTemp } = analysis;
       const wt = windType(bestSlot.windDir, orientation);
 
       return {
@@ -203,7 +212,7 @@ function analyzeForecasts(scrapedData) {
         windType: wt.label,
         bestWindow,
         maxDanger,
-        avgTemp,
+        windowTemp,
         allForecasts: s.data.forecasts,
         orientation,
       };
@@ -214,12 +223,13 @@ function analyzeForecasts(scrapedData) {
   // Section 1 — Rapport du jour
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
-  report += `🌡️ Air ~${spotResults[0]?.avgTemp ?? '?'}°C | Eau ~${waterTemp}°C\n\n`;
+  report += `🌊 Eau ~${waterTemp}°C\n\n`;
 
   spotResults.forEach((spot, i) => {
     report += `${medals[i]} ${spot.name} — ${spot.score}/10\n`;
     report += `   🌊 ${spot.waveHeight ?? '?'}m / ${spot.wavePeriod ?? '?'}s / ${spot.waveDir}\n`;
     report += `   💨 ${spot.windDir} ${spot.windSpeed} km/h (${spot.windType})\n`;
+    report += `   🌡️ ${spot.windowTemp ?? '?'}°C pendant la session\n`;
     report += `   ${spot.maxDanger.emoji} Danger : ${spot.maxDanger.level}`;
     if (spot.maxDanger.score >= 3) {
       const reasons = [];
