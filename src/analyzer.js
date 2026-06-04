@@ -222,14 +222,14 @@ function analyzeForecasts(scrapedData) {
 
   // Section 1 — Rapport du jour
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
+  const bestTemp = spotResults[0]?.windowTemp ?? '?';
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
-  report += `🌊 Eau ~${waterTemp}°C\n\n`;
+  report += `🌡️ Air ${bestTemp}°C | Eau ~${waterTemp}°C\n\n`;
 
   spotResults.forEach((spot, i) => {
     report += `${medals[i]} ${spot.name} — ${spot.score}/10\n`;
     report += `   🌊 ${spot.waveHeight ?? '?'}m / ${spot.wavePeriod ?? '?'}s / ${spot.waveDir}\n`;
     report += `   💨 ${spot.windDir} ${spot.windSpeed} km/h (${spot.windType})\n`;
-    report += `   🌡️ ${spot.windowTemp ?? '?'}°C pendant la session\n`;
     report += `   ${spot.maxDanger.emoji} Danger : ${spot.maxDanger.level}`;
     if (spot.maxDanger.score >= 3) {
       const reasons = [];
