@@ -158,9 +158,9 @@ function computeRisingTideWindows(tideTimes) {
   if (!tideTimes || tideTimes.length < 2) return [];
 
   // Déterminer si le premier est haut ou bas :
-  // Heuristique : si le 1er est très tôt (< 4h), c'est souvent une basse
-  // Sinon on alterne à partir de "bas"
-  let firstIsLow = tideTimes[0] < 5;
+  // Heuristique Cotentin : la 1ère marée du jour (très tôt) est généralement une BM
+  // Si le 1er horaire est avant 8h c'est une BM, sinon une PM
+  let firstIsLow = tideTimes[0] < 8;
 
   const windows = [];
   for (let i = 0; i < tideTimes.length; i++) {
