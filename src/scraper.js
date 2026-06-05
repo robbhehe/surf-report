@@ -68,6 +68,24 @@ async function scrapeSpot(spotId, spotName) {
         });
       }
 
+      function parseTides() {
+        const row = document.getElementById('tabid_0_0_tides');
+        if (!row) return [];
+        const cells = Array.from(row.querySelectorAll('td'));
+        return cells.map(td => {
+          const text = td.textContent.trim();
+          const colspan = parseInt(td.getAttribute('colspan')) || 1;
+          // Extraire les heures HH:MM concaténées
+          const times = [];
+          for (let i = 0; i + 4 <= text.length; i += 5) {
+            const chunk = text.slice(i, i + 5);
+            const m = chunk.match(/^(\d{2}):(\d{2})$/);
+            if (m) times.push({ h: parseInt(m[1]), m: parseInt(m[2]) });
+          }
+          return { colspan, times };
+        });
+      }
+
       const dates = parseDates('tabid_0_0_dates');
 
       return {
@@ -79,6 +97,7 @@ async function scrapeSpot(spotId, spotName) {
         wavePeriod: getTextValues('tabid_0_0_PERPW'),
         waveDir: getDirectionValues('tabid_0_0_DIRPW'),
         temperature: getTextValues('tabid_0_0_TMPE'),
+        tidesCells: parseTides(),
       };
     });
 
@@ -89,9 +108,81 @@ async function scrapeSpot(spotId, spotName) {
   }
 }
 
+function buildTidesByDay(dates, tidesCells) {
+  // Associer chaque cellule de marée au jour correspondant via les colspan
+  if (!tidesCells || tidesCells.length === 0) return {};
+
+  const dayKeys = [];
+  const seen = new Set();
+  for (const d of dates) {
+    const key = `${d.dayName}${d.dayNum}`;
+    if (!seen.has(key)) { seen.add(key); dayKeys.push(key); }
+  }
+
+  const tidesByDay = {};
+  let dayIdx = 0;
+  let colsUsed = 0;
+  const slotsPerDay = {};
+  for (const d of dates) {
+    const key = `${d.dayName}${d.dayNum}`;
+    slotsPerDay[key] = (slotsPerDay[key] || 0) + 1;
+  }
+
+  // Chaque cellule de marée couvre 'colspan' colonnes de données
+  let colOffset = 0;
+  for (const cell of tidesCells) {
+    // Trouver quel jour correspond à cette cellule
+    let remaining = cell.colspan;
+    let accumulated = 0;
+    for (let di = 0; di < dayKeys.length; di++) {
+      const key = dayKeys[di];
+      const count = slotsPerDay[key] || 0;
+      if (colOffset < accumulated + count) {
+        // Cette cellule de marée appartient à ce jour
+        const tideTimes = cell.times.map(t => t.h + t.m / 60).sort((a, b) => a - b);
+        tidesByDay[key] = tideTimes;
+        break;
+      }
+      accumulated += count;
+    }
+    colOffset += cell.colspan;
+  }
+
+  return tidesByDay;
+}
+
+function computeRisingTideWindows(tideTimes) {
+  // tideTimes = heures décimales triées [6.5, 12.25, 18.75]
+  // Les marées alternent basse/haute. On suppose que la 1ère avant 6h est basse.
+  // Si la 1ère est après 6h, c'est probablement une haute.
+  if (!tideTimes || tideTimes.length < 2) return [];
+
+  // Déterminer si le premier est haut ou bas :
+  // Heuristique : si le 1er est très tôt (< 4h), c'est souvent une basse
+  // Sinon on alterne à partir de "bas"
+  let firstIsLow = tideTimes[0] < 5;
+
+  const windows = [];
+  for (let i = 0; i < tideTimes.length; i++) {
+    const isHigh = firstIsLow ? (i % 2 === 1) : (i % 2 === 0);
+    if (isHigh) {
+      // Fenêtre montante = 3h avant la marée haute
+      const highTime = tideTimes[i];
+      windows.push({ start: highTime - 3, end: highTime, high: highTime });
+    }
+  }
+  return windows;
+}
+
+function isInRisingTide(hour, risingWindows) {
+  if (!risingWindows || risingWindows.length === 0) return false;
+  return risingWindows.some(w => hour >= w.start && hour <= w.end);
+}
+
 function buildForecasts(raw) {
-  const { dates, windSpeed, windGust, windDir, waveHeight, wavePeriod, waveDir, temperature } = raw;
+  const { dates, windSpeed, windGust, windDir, waveHeight, wavePeriod, waveDir, temperature, tidesCells } = raw;
   const len = dates.length;
+  const tidesByDay = buildTidesByDay(dates, tidesCells);
 
   const byDay = {};
   for (let i = 0; i < len; i++) {
@@ -110,11 +201,17 @@ function buildForecasts(raw) {
     });
   }
 
-  return Object.values(byDay).map(day => ({
-    date: day.label,
-    slots: day.slots,
-    summary: summarizeDay(day.slots),
-  }));
+  return Object.values(byDay).map(day => {
+    const tideTimes = tidesByDay[day.label] || [];
+    const risingWindows = computeRisingTideWindows(tideTimes);
+    return {
+      date: day.label,
+      slots: day.slots,
+      tideTimes,
+      risingWindows,
+      summary: summarizeDay(day.slots),
+    };
+  });
 }
 
 function degreesToCardinal(deg) {
@@ -154,4 +251,4 @@ async function scrapeAllSpots(spots) {
   return results;
 }
 
-module.exports = { scrapeSpot, scrapeAllSpots, degreesToCardinal, knotsToKmh };
+module.exports = { scrapeSpot, scrapeAllSpots, degreesToCardinal, knotsToKmh, isInRisingTide };

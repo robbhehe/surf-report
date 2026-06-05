@@ -1,4 +1,4 @@
-const { degreesToCardinal, knotsToKmh } = require('./scraper');
+const { degreesToCardinal, knotsToKmh, isInRisingTide } = require('./scraper');
 
 const SPOT_ORIENTATIONS = {
   'Surtainville': 270,
@@ -104,11 +104,9 @@ function scoreSlot(slot, spotOrientation) {
     if (ws > 30) score -= 2;
   }
 
-  // === BONUS HORAIRE — matin = meilleur créneau surf ===
-  if (hour != null) {
-    if (hour >= 7 && hour <= 11) score += 1;       // bonus matin
-    else if (hour >= 19) score -= 1;               // malus soirée (lumière, fatigue)
-  }
+  // === BONUS MARÉE — marée montante vers haute = idéal ===
+  // (passé via slot.risingTide, calculé en amont)
+  if (slot.risingTide) score += 2;
 
   // Malus danger
   const d = dangerLevel(slot);
@@ -118,13 +116,14 @@ function scoreSlot(slot, spotOrientation) {
   return { score: Math.max(0, Math.min(10, score)) };
 }
 
-function findBestWindow(slots, spotOrientation) {
+function findBestWindow(slots, spotOrientation, risingWindows) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
   const scored = daySlots.map(s => ({
     ...s,
-    score: scoreSlot(s, spotOrientation).score,
+    risingTide: isInRisingTide(s.hour, risingWindows),
+    score: scoreSlot({ ...s, risingTide: isInRisingTide(s.hour, risingWindows) }, spotOrientation).score,
   }));
 
   let bestStart = 0, bestEnd = 0, bestAvg = 0;
@@ -161,11 +160,30 @@ function formatWindow(start, end) {
   return `${start}h-${end}h (${period})`;
 }
 
-function analyzeSpotDay(slots, orientation) {
+function formatTides(tideTimes) {
+  if (!tideTimes || tideTimes.length === 0) return null;
+  // tideTimes = heures décimales triées
+  // Alterner PM (pleine mer) / BM (basse mer)
+  const firstIsLow = tideTimes[0] < 5;
+  return tideTimes.map((t, i) => {
+    const isHigh = firstIsLow ? (i % 2 === 1) : (i % 2 === 0);
+    const h = Math.floor(t);
+    const m = Math.round((t - h) * 60);
+    return `${isHigh ? 'PM' : 'BM'} ${h}h${String(m).padStart(2, '0')}`;
+  }).join(' · ');
+}
+
+function analyzeSpotDay(slots, orientation, risingWindows) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
-  const scored = daySlots.map(sl => ({
+  // Annoter chaque slot avec l'info marée montante
+  const annotated = daySlots.map(sl => ({
+    ...sl,
+    risingTide: isInRisingTide(sl.hour, risingWindows),
+  }));
+
+  const scored = annotated.map(sl => ({
     ...sl,
     score: scoreSlot(sl, orientation).score,
     wt: windType(sl.windDir, orientation),
@@ -174,7 +192,7 @@ function analyzeSpotDay(slots, orientation) {
 
   const avgScore = Math.round(scored.reduce((a, s) => a + s.score, 0) / scored.length);
   const bestSlot = scored.reduce((best, sl) => sl.score > best.score ? sl : best, scored[0]);
-  const bestWindow = findBestWindow(slots, orientation);
+  const bestWindow = findBestWindow(slots, orientation, risingWindows);
 
   // Danger max de la journée
   const maxDanger = scored.reduce((worst, sl) => sl.danger.score > worst.score ? sl.danger : worst, scored[0].danger);
@@ -210,10 +228,11 @@ function analyzeForecasts(scrapedData) {
       const todayForecast = s.data.forecasts[0];
       if (!todayForecast) return null;
 
-      const analysis = analyzeSpotDay(todayForecast.slots, orientation);
+      const analysis = analyzeSpotDay(todayForecast.slots, orientation, todayForecast.risingWindows);
       if (!analysis) return null;
 
       const { bestSlot, bestWindow, maxDanger, windowTemp } = analysis;
+      const tideInfo = formatTides(todayForecast.tideTimes);
       const wt = windType(bestSlot.windDir, orientation);
 
       return {
@@ -228,6 +247,7 @@ function analyzeForecasts(scrapedData) {
         bestWindow,
         maxDanger,
         windowTemp,
+        tideInfo,
         allForecasts: s.data.forecasts,
         orientation,
       };
@@ -238,8 +258,11 @@ function analyzeForecasts(scrapedData) {
   // Section 1 — Rapport du jour
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
   const bestTemp = spotResults[0]?.windowTemp ?? '?';
+  const tideDisplay = spotResults[0]?.tideInfo;
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
-  report += `🌡️ Air ${bestTemp}°C | Eau ~${waterTemp}°C\n\n`;
+  report += `🌡️ Air ${bestTemp}°C | Eau ~${waterTemp}°C\n`;
+  if (tideDisplay) report += `🌊 Marées : ${tideDisplay}\n`;
+  report += '\n';
 
   spotResults.forEach((spot, i) => {
     report += `${medals[i]} ${spot.name} — ${spot.score}/10\n`;
@@ -311,7 +334,7 @@ function analyzeForecasts(scrapedData) {
       const matchDay = s.data.forecasts.find(f => f.date === day.date);
       if (!matchDay) return;
 
-      const analysis = analyzeSpotDay(matchDay.slots, orientation);
+      const analysis = analyzeSpotDay(matchDay.slots, orientation, matchDay.risingWindows);
       if (!analysis) return;
 
       if (analysis.avgScore > bestScoreForDay) {
