@@ -72,30 +72,45 @@ function scoreSlot(slot, spotOrientation) {
   const wp = slot.wavePeriod;
   const ws = slot.windSpeed;
   const wd = slot.windDir;
+  const hour = slot.hour;
 
+  // === HOULE (facteur principal) ===
   if (wh == null) return { score: 0 };
-  if (wh >= 0.8 && wh <= 2.0) score += 2;
-  else if (wh >= 0.5 && wh <= 2.5) score += 1;
-  else if (wh < 0.3) score -= 3;
-  else if (wh > 3.0) score -= 1;
+  if (wh >= 0.8 && wh <= 2.0) score += 3;       // idéal bodyboard
+  else if (wh >= 0.5 && wh < 0.8) score += 1;    // petit mais surfable
+  else if (wh > 2.0 && wh <= 2.5) score += 2;    // costaud mais jouable
+  else if (wh < 0.3) score -= 4;                  // flat, pas la peine
+  else if (wh > 3.0) score -= 1;                  // gros, dangereux
 
+  // Période
   if (wp != null) {
     if (wp >= 10) score += 2;
     else if (wp >= 8) score += 1;
-    else if (wp < 6) score -= 1;
+    else if (wp < 6) score -= 2;                  // clapot, mauvaise qualité
   }
 
+  // === VENT ===
   if (ws != null) {
     const wt = windType(wd, spotOrientation);
-    if (ws <= 5) score += 2;
-    else if (wt.label === 'offshore' && ws <= 20) score += 2;
-    else if (wt.label === 'side-off') score += 1;
+    if (ws <= 8) {
+      // Vent faible — bonus seulement si il y a de la houle
+      if (wh >= 0.6) score += 2;
+      else score += 0;
+    } else if (wt.label === 'offshore' && ws <= 25) score += 2;
+    else if (wt.label === 'side-off' && ws <= 20) score += 1;
     else if (wt.label === 'onshore') score -= 3;
+    else if (wt.label === 'side-on' && ws > 15) score -= 2;
     else if (wt.label === 'side-on') score -= 1;
     if (ws > 30) score -= 2;
   }
 
-  // Malus danger : si conditions dangereuses, on baisse la note
+  // === BONUS HORAIRE — matin = meilleur créneau surf ===
+  if (hour != null) {
+    if (hour >= 7 && hour <= 11) score += 1;       // bonus matin
+    else if (hour >= 19) score -= 1;               // malus soirée (lumière, fatigue)
+  }
+
+  // Malus danger
   const d = dangerLevel(slot);
   if (d.score >= 6) score -= 2;
   else if (d.score >= 3) score -= 1;
