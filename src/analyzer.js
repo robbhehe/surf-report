@@ -66,54 +66,103 @@ function dangerLevel(slot) {
   return { level: 'OK', emoji: '🟢', score: danger };
 }
 
+// Système par composantes pondérées. Total max ~10, atteint UNIQUEMENT si tous
+// les curseurs sont au vert (taille idéale + groundswell + offshore léger + bonne marée).
+// Une condition "correcte mais pas parfaite" plafonne naturellement autour de 5-7.
 function scoreSlot(slot, spotOrientation) {
-  let score = 5;
   const wh = slot.waveHeight;
   const wp = slot.wavePeriod;
   const ws = slot.windSpeed;
   const wd = slot.windDir;
-  const hour = slot.hour;
 
-  // === HOULE (facteur principal) ===
   if (wh == null) return { score: 0 };
-  if (wh >= 0.8 && wh <= 2.0) score += 3;       // idéal bodyboard
-  else if (wh >= 0.5 && wh < 0.8) score += 1;    // petit mais surfable
-  else if (wh > 2.0 && wh <= 2.5) score += 2;    // costaud mais jouable
-  else if (wh < 0.3) score -= 4;                  // flat, pas la peine
-  else if (wh > 3.0) score -= 1;                  // gros, dangereux
 
-  // Période
-  if (wp != null) {
-    if (wp >= 10) score += 2;
-    else if (wp >= 8) score += 1;
-    else if (wp < 6) score -= 2;                  // clapot, mauvaise qualité
+  // Flat = inutile, peu importe le reste
+  if (wh < 0.3) return { score: 0 };
+
+  // === 1. TAILLE DE HOULE (0 à 3.5) ===
+  let sizePts;
+  if (wh >= 1.0 && wh <= 1.8) sizePts = 3.5;        // idéal : creux, puissant, gérable
+  else if (wh >= 0.8 && wh < 1.0) sizePts = 2.8;    // joli petit
+  else if (wh > 1.8 && wh <= 2.2) sizePts = 2.8;    // costaud mais bon
+  else if (wh >= 0.5 && wh < 0.8) sizePts = 1.5;    // petit
+  else if (wh > 2.2 && wh <= 2.8) sizePts = 1.5;    // gros, engagé
+  else if (wh > 2.8 && wh <= 3.3) sizePts = 0.6;    // très gros
+  else sizePts = 0.3;                                // énorme/dangereux
+
+  // === 2. PÉRIODE (0 à 2.5) — qualité/puissance de la houle ===
+  let periodPts;
+  if (wp == null) periodPts = 1.0;
+  else if (wp >= 12) periodPts = 2.5;               // vrai groundswell, organisé
+  else if (wp >= 10) periodPts = 2.0;
+  else if (wp >= 8) periodPts = 1.3;
+  else if (wp >= 6) periodPts = 0.6;
+  else periodPts = 0;                                // clapot, vagues molles/désordonnées
+
+  // === 3. VENT (−3 à 3) — LE facteur différenciant ===
+  // Offshore léger = face lisse et tenue. Onshore = vague hachée/molle.
+  let windPts;
+  const wt = windType(wd, spotOrientation);
+  if (ws == null) {
+    windPts = 0.5;
+  } else if (ws <= 5) {
+    windPts = 2.2;                                   // quasi nul = glassy, très bon
+  } else if (wt.label === 'offshore') {
+    if (ws <= 10) windPts = 3.0;                     // offshore léger = PARFAIT
+    else if (ws <= 18) windPts = 2.0;                // offshore modéré, encore très bon
+    else if (ws <= 25) windPts = 0.8;               // offshore fort, ça tient mais ça pince
+    else windPts = -0.5;                             // offshore trop fort
+  } else if (wt.label === 'side-off') {
+    if (ws <= 12) windPts = 1.5;
+    else if (ws <= 20) windPts = 0.8;
+    else windPts = -0.5;
+  } else if (wt.label === 'side') {
+    if (ws <= 10) windPts = 0.5;
+    else if (ws <= 18) windPts = -0.5;
+    else windPts = -1.5;
+  } else if (wt.label === 'side-on') {
+    if (ws <= 10) windPts = -0.8;                    // side-on même léger = pénalité
+    else if (ws <= 18) windPts = -1.8;
+    else windPts = -3.0;
+  } else { // onshore
+    if (ws <= 8) windPts = -1.5;                     // onshore léger = déjà mauvais
+    else if (ws <= 15) windPts = -2.5;
+    else windPts = -3.0;                             // blown out
   }
 
-  // === VENT ===
-  if (ws != null) {
-    const wt = windType(wd, spotOrientation);
-    if (ws <= 8) {
-      // Vent faible — bonus seulement si il y a de la houle
-      if (wh >= 0.6) score += 2;
-      else score += 0;
-    } else if (wt.label === 'offshore' && ws <= 25) score += 2;
-    else if (wt.label === 'side-off' && ws <= 20) score += 1;
-    else if (wt.label === 'onshore') score -= 3;
-    else if (wt.label === 'side-on' && ws > 15) score -= 2;
-    else if (wt.label === 'side-on') score -= 1;
-    if (ws > 30) score -= 2;
-  }
+  // === 4. MARÉE (0 à 1) ===
+  const tidePts = slot.risingTide ? 1.0 : 0.3;
 
-  // === BONUS MARÉE — marée montante vers haute = idéal ===
-  // (passé via slot.risingTide, calculé en amont)
-  if (slot.risingTide) score += 2;
+  let score = sizePts + periodPts + windPts + tidePts;
 
-  // Malus danger
+  // === Malus danger ===
   const d = dangerLevel(slot);
   if (d.score >= 6) score -= 2;
   else if (d.score >= 3) score -= 1;
 
-  return { score: Math.max(0, Math.min(10, score)) };
+  // === Plafond selon la taille ===
+  // La taille est la fondation : sans vagues, pas de bonne session, même tout propre.
+  let cap = 10;
+  if (wh < 0.5) cap = 4;        // ridicule
+  else if (wh < 0.8) cap = 6;   // petit, fun au mieux
+  else if (wh < 1.0) cap = 8;   // joli petit, peut être très bon sans être parfait
+  score = Math.min(score, cap);
+
+  return { score: Math.max(0, Math.min(10, Math.round(score))) };
+}
+
+// Une session est "parfaite" (🪟) seulement si TOUS les curseurs sont au vert.
+function isPerfectSlot(slot, spotOrientation) {
+  const wh = slot.waveHeight, wp = slot.wavePeriod, ws = slot.windSpeed;
+  if (wh == null || wp == null || ws == null) return false;
+  const wt = windType(slot.windDir, spotOrientation);
+  const offshoreOrCalm = ws <= 5 || (wt.label === 'offshore' && ws <= 12);
+  return (
+    wh >= 1.0 && wh <= 1.9 &&     // taille idéale
+    wp >= 11 &&                    // groundswell
+    offshoreOrCalm &&              // vent parfait
+    slot.risingTide               // bonne marée
+  );
 }
 
 function findBestWindow(slots, spotOrientation, risingWindows) {
@@ -191,11 +240,24 @@ function analyzeSpotDay(slots, orientation, risingWindows) {
   }));
 
   const avgScore = Math.round(scored.reduce((a, s) => a + s.score, 0) / scored.length);
-  const bestSlot = scored.reduce((best, sl) => sl.score > best.score ? sl : best, scored[0]);
   const bestWindow = findBestWindow(slots, orientation, risingWindows);
+
+  // Le créneau représentatif = le meilleur DANS la fenêtre recommandée (cohérence
+  // entre la note affichée et les données de vague/vent montrées).
+  let windowScored = scored;
+  if (bestWindow) {
+    const inWindow = scored.filter(s => s.hour >= bestWindow.start && s.hour < bestWindow.end);
+    if (inWindow.length) windowScored = inWindow;
+  }
+  const bestSlot = windowScored.reduce((best, sl) => sl.score > best.score ? sl : best, windowScored[0]);
+  // Note affichée = score de la meilleure fenêtre (ce que tu obtiens si tu y vas)
+  const windowScore = bestWindow ? bestWindow.avgScore : avgScore;
 
   // Danger max de la journée
   const maxDanger = scored.reduce((worst, sl) => sl.danger.score > worst.score ? sl.danger : worst, scored[0].danger);
+
+  // Conditions parfaites : au moins un créneau coche TOUTES les cases
+  const isPerfect = scored.some(sl => isPerfectSlot(sl, orientation));
 
   // Température pendant la meilleure fenêtre
   let windowTemp = null;
@@ -210,7 +272,7 @@ function analyzeSpotDay(slots, orientation, risingWindows) {
     windowTemp = bestSlot.temperature ?? null;
   }
 
-  return { avgScore, bestSlot, bestWindow, maxDanger, windowTemp, daySlots: scored };
+  return { avgScore, windowScore, bestSlot, bestWindow, maxDanger, windowTemp, isPerfect, daySlots: scored };
 }
 
 function analyzeForecasts(scrapedData) {
@@ -231,13 +293,14 @@ function analyzeForecasts(scrapedData) {
       const analysis = analyzeSpotDay(todayForecast.slots, orientation, todayForecast.risingWindows);
       if (!analysis) return null;
 
-      const { bestSlot, bestWindow, maxDanger, windowTemp } = analysis;
+      const { bestSlot, bestWindow, maxDanger, windowTemp, windowScore, isPerfect } = analysis;
       const tideInfo = formatTides(todayForecast.tideTimes);
       const wt = windType(bestSlot.windDir, orientation);
 
       return {
         name: s.name,
-        score: analysis.avgScore,
+        score: windowScore,
+        isPerfect,
         waveHeight: bestSlot.waveHeight,
         wavePeriod: bestSlot.wavePeriod,
         waveDir: degreesToCardinal(bestSlot.waveDir),
@@ -297,17 +360,27 @@ function analyzeForecasts(scrapedData) {
     report += `⚠️ Danger élevé sur ${dangerousSpots.map(s => s.name).join(', ')}. Courants forts, à éviter.\n`;
   }
 
-  if (best && best.score >= 7) {
-    const period = best.bestWindow && best.bestWindow.start < 12 ? 'ce matin' : 'cet après-midi';
-    report += `💡 Go ${best.name} ${period} ! Belles conditions.`;
-  } else if (best && best.score >= 5) {
-    report += `💡 ${best.name} est jouable${best.bestWindow ? ' vers ' + best.bestWindow.start + 'h-' + best.bestWindow.end + 'h' : ''}.`;
-  } else if (best && best.score >= 3) {
-    report += `💡 ${best.name} est le moins pire aujourd'hui, conditions moyennes.`;
+  const moment = (w) => {
+    if (!w) return "aujourd'hui";
+    if (w.start < 12) return 'ce matin';
+    if (w.start < 17) return 'cet après-midi';
+    return 'ce soir';
+  };
+
+  if (best && best.isPerfect) {
+    report += `🪟 CONDITIONS PARFAITES sur ${best.name} ${moment(best.bestWindow)} — session rare, fonce !`;
+  } else if (best && best.score >= 8) {
+    report += `💡 Go ${best.name} ${moment(best.bestWindow)} ! Très belles conditions.`;
+  } else if (best && best.score >= 6) {
+    report += `💡 ${best.name} ${moment(best.bestWindow)}, conditions correctes${best.bestWindow ? ' (' + best.bestWindow.start + 'h-' + best.bestWindow.end + 'h)' : ''}.`;
+  } else if (best && best.score >= 4) {
+    report += `💡 ${best.name} est jouable mais sans plus, conditions moyennes.`;
+  } else if (best && best.score >= 2) {
+    report += `💡 ${best.name} est le moins pire, mais c'est faible. Patiente plutôt.`;
   } else {
-    report += `💡 Journée à skipper, conditions mauvaises partout.`;
+    report += `💡 Journée à skipper, rien d'intéressant.`;
   }
-  if (worst && worst.score <= 3 && worst.name !== best?.name) {
+  if (worst && worst.score <= 2 && worst.name !== best?.name) {
     report += ` Évite ${worst.name} (${worst.windType}).`;
   }
 
@@ -337,9 +410,9 @@ function analyzeForecasts(scrapedData) {
       const analysis = analyzeSpotDay(matchDay.slots, orientation, matchDay.risingWindows);
       if (!analysis) return;
 
-      if (analysis.avgScore > bestScoreForDay) {
-        bestScoreForDay = analysis.avgScore;
-        bestSpotForDay = { name: s.name, score: analysis.avgScore, window: analysis.bestWindow, day: matchDay, danger: analysis.maxDanger };
+      if (analysis.windowScore > bestScoreForDay) {
+        bestScoreForDay = analysis.windowScore;
+        bestSpotForDay = { name: s.name, score: analysis.windowScore, window: analysis.bestWindow, day: matchDay, danger: analysis.maxDanger, isPerfect: analysis.isPerfect };
       }
       if (analysis.maxDanger.score > dayMaxDanger.score) {
         dayMaxDanger = analysis.maxDanger;
@@ -361,12 +434,15 @@ function analyzeForecasts(scrapedData) {
     } else if (maxWave > 3.5 && maxWind > 30) {
       icon = '🌀';
       extra = ' TEMPÊTE — à éviter';
+    } else if (bestSpotForDay.isPerfect) {
+      icon = '🪟';
+      extra = ' CONDITIONS PARFAITES';
     } else if (maxWave > 2 && maxPeriod > 12) {
       icon = '⭐';
       extra = ` GROSSE HOULE — ${maxWave}m / ${maxPeriod}s`;
-    } else if (bestSpotForDay.score >= 7) {
+    } else if (bestSpotForDay.score >= 8) {
       icon = '🟢';
-    } else if (bestSpotForDay.score >= 4) {
+    } else if (bestSpotForDay.score >= 5) {
       icon = '🟡';
     } else {
       icon = '🔴';
@@ -374,8 +450,9 @@ function analyzeForecasts(scrapedData) {
 
     const windowLabel = bestSpotForDay.window ? bestSpotForDay.window.label : 'aucun créneau';
 
-    if (bestSpotForDay.score <= 2 && !extra) {
-      report += `${day.date} — ${icon} Aucun spot — conditions défavorables\n`;
+    // Sous 4/10, aucun spot ne vaut le coup ce jour-là
+    if (bestSpotForDay.score < 4 && !extra) {
+      report += `${day.date} — 🔴 Aucun spot intéressant\n`;
     } else {
       report += `${day.date} — ${icon} ${bestSpotForDay.name}, ${windowLabel}${extra}\n`;
     }
