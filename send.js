@@ -4,6 +4,28 @@ const { scrapeAllSpots } = require('./src/scraper');
 const { analyzeForecasts } = require('./src/analyzer');
 const { sendReport } = require('./src/telegram');
 
+// Heure actuelle à Paris (le runner GitHub est en UTC)
+function parisHour() {
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Paris',
+    hour: 'numeric',
+    hour12: false,
+  });
+  return parseInt(fmt.format(new Date()), 10);
+}
+
+// Garde-fou : sur un déclenchement automatique (cron), n'envoyer que le matin.
+// Les déclenchements manuels (workflow_dispatch ou lancement local) passent toujours.
+const isScheduled = process.env.GITHUB_EVENT_NAME === 'schedule';
+if (isScheduled) {
+  const h = parisHour();
+  if (h < 6 || h >= 10) {
+    console.log(`⏭️  Déclenchement à ${h}h Paris — hors de la fenêtre 6h-10h. Envoi annulé (anti-spam).`);
+    process.exit(0);
+  }
+  console.log(`✓ Déclenchement à ${h}h Paris — dans la fenêtre matinale, on continue.`);
+}
+
 (async () => {
   try {
     console.log('1. Scraping Windguru...');

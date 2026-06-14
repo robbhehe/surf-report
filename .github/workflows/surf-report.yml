@@ -2,8 +2,11 @@ name: Surf Report Quotidien
 
 on:
   schedule:
-    # 5h00 UTC = 7h00 Paris (été) / 6h00 Paris (hiver)
-    - cron: '0 5 * * *'
+    # Minute "creuse" (32) pour éviter l'engorgement du haut de l'heure chez GitHub.
+    # 5h32 UTC = 7h32 Paris (été) / 6h32 (hiver). Avec le délai GitHub, arrive vers 7h30-8h.
+    # Un seul cron = pas de double envoi. Le garde-fou dans send.js bloque tout envoi
+    # automatique en dehors de 6h-10h Paris (anti-spam si GitHub déclenche en retard).
+    - cron: '32 5 * * *'
   workflow_dispatch: # Permet de lancer manuellement depuis GitHub
 
 jobs:
@@ -23,4 +26,5 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: node send.js
