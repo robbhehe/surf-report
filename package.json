@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "test-scraper": "node test-scraper.js",
     "find-spots": "node find-spots.js",
-    "send-now": "node -e \"require('./src/index.js').sendReport()\""
+    "send-now": "node send.js",
+    "listen": "node listener.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
