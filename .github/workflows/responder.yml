@@ -1,0 +1,31 @@
+name: Répondeur Telegram
+
+on:
+  schedule:
+    # Toutes les 5 minutes : vérifie si tu as envoyé un message et répond avec les prévisions.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+# Empêche deux exécutions simultanées (sinon conflit getUpdates)
+concurrency:
+  group: telegram-responder
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Vérifier les messages et répondre
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node poll.js
