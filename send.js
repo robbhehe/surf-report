@@ -3,6 +3,7 @@ const { SPOTS } = require('./src/config');
 const { scrapeAllSpots } = require('./src/scraper');
 const { analyzeForecasts } = require('./src/analyzer');
 const { sendReport } = require('./src/telegram');
+const { fetchTides } = require('./src/tides');
 
 // Heure actuelle à Paris (le runner GitHub est en UTC)
 function parisHour() {
@@ -38,10 +39,14 @@ if (isScheduled) {
       process.exit(1);
     }
 
-    console.log('2. Analyse...');
-    const report = analyzeForecasts(data);
+    console.log('2. Marées (maree.info)...');
+    let tides = null;
+    try { tides = await fetchTides(); } catch (e) { console.warn('   ⚠️ Marées indispo, repli Windguru:', e.message); }
 
-    console.log('3. Envoi Telegram...');
+    console.log('3. Analyse...');
+    const report = analyzeForecasts(data, tides);
+
+    console.log('4. Envoi Telegram...');
     await sendReport(report);
 
     console.log('✓ Rapport envoyé !');

@@ -6,6 +6,7 @@ const { SPOTS } = require('./src/config');
 const { scrapeAllSpots } = require('./src/scraper');
 const { analyzeForecasts } = require('./src/analyzer');
 const { sendReport } = require('./src/telegram');
+const { fetchTides } = require('./src/tides');
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ALLOWED_CHAT = String(process.env.TELEGRAM_CHAT_ID);
@@ -58,7 +59,9 @@ async function tg(method, params) {
       console.error('Scraping échoué.');
       return;
     }
-    const report = analyzeForecasts(data);
+    let tides = null;
+    try { tides = await fetchTides(); } catch (e) { console.warn('Marées indispo, repli Windguru:', e.message); }
+    const report = analyzeForecasts(data, tides);
     await sendReport(report);
     console.log('✓ Prévisions envoyées !');
   } catch (e) {

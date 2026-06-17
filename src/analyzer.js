@@ -1,4 +1,5 @@
 const { degreesToCardinal, knotsToKmh, isInRisingTide } = require('./scraper');
+const { risingWindowsFromTides, formatTides: formatRealTides } = require('./tides');
 
 const SPOT_ORIENTATIONS = {
   'Surtainville': 270,
@@ -275,7 +276,21 @@ function analyzeSpotDay(slots, orientation, risingWindows) {
   return { avgScore, windowScore, bestSlot, bestWindow, maxDanger, windowTemp, isPerfect, daySlots: scored };
 }
 
-function analyzeForecasts(scrapedData) {
+// Récupère les marées d'un jour depuis maree.info si dispo, sinon repli sur Windguru.
+// `tidesByDay` = Map(numéro du jour -> [{hour, type}]) fournie par tides.fetchTides().
+function tidesForDay(forecastDay, tidesByDay) {
+  const dayNumMatch = forecastDay.date.match(/(\d+)/);
+  const dayNum = dayNumMatch ? parseInt(dayNumMatch[1], 10) : null;
+  const events = tidesByDay && dayNum != null ? tidesByDay.get(dayNum) : null;
+
+  if (events && events.length) {
+    return { risingWindows: risingWindowsFromTides(events), display: formatRealTides(events) };
+  }
+  // Repli : données Windguru (moins fiables sur PM/BM)
+  return { risingWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes) };
+}
+
+function analyzeForecasts(scrapedData, tidesByDay) {
   const today = new Date();
   const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
   const months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
@@ -290,11 +305,12 @@ function analyzeForecasts(scrapedData) {
       const todayForecast = s.data.forecasts[0];
       if (!todayForecast) return null;
 
-      const analysis = analyzeSpotDay(todayForecast.slots, orientation, todayForecast.risingWindows);
+      const dayTides = tidesForDay(todayForecast, tidesByDay);
+      const analysis = analyzeSpotDay(todayForecast.slots, orientation, dayTides.risingWindows);
       if (!analysis) return null;
 
       const { bestSlot, bestWindow, maxDanger, windowTemp, windowScore, isPerfect } = analysis;
-      const tideInfo = formatTides(todayForecast.tideTimes);
+      const tideInfo = dayTides.display;
       const wt = windType(bestSlot.windDir, orientation);
 
       return {
@@ -407,7 +423,8 @@ function analyzeForecasts(scrapedData) {
       const matchDay = s.data.forecasts.find(f => f.date === day.date);
       if (!matchDay) return;
 
-      const analysis = analyzeSpotDay(matchDay.slots, orientation, matchDay.risingWindows);
+      const dayTides = tidesForDay(matchDay, tidesByDay);
+      const analysis = analyzeSpotDay(matchDay.slots, orientation, dayTides.risingWindows);
       if (!analysis) return;
 
       if (analysis.windowScore > bestScoreForDay) {
