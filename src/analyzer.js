@@ -141,12 +141,18 @@ function scoreSlot(slot, spotOrientation) {
   if (d.score >= 6) score -= 2;
   else if (d.score >= 3) score -= 1;
 
-  // === Plafond selon la taille ===
-  // La taille est la fondation : sans vagues, pas de bonne session, même tout propre.
+  // === Plafond selon la taille, MODULÉ par la propreté ===
+  // La taille reste la fondation, MAIS une petite houle propre (offshore/glassy,
+  // bonne période, marée favorable) peut donner une vraie session fun : on remonte
+  // alors le plafond. Une petite houle onshore/désordonnée reste plafonnée bas.
+  const clean = windPts >= 2 && (wp == null || wp >= 9); // offshore léger/nul + période correcte
+  const glassy = clean && slot.risingTide;               // en prime : marée montante
+
   let cap = 10;
-  if (wh < 0.5) cap = 4;        // ridicule
-  else if (wh < 0.8) cap = 6;   // petit, fun au mieux
-  else if (wh < 1.0) cap = 8;   // joli petit, peut être très bon sans être parfait
+  if (wh < 0.4) cap = glassy ? 5 : clean ? 4 : 3;
+  else if (wh < 0.6) cap = glassy ? 7 : clean ? 6 : 5;
+  else if (wh < 0.8) cap = glassy ? 8 : clean ? 7 : 6;
+  else if (wh < 1.0) cap = clean ? 9 : 8;
   score = Math.min(score, cap);
 
   return { score: Math.max(0, Math.min(10, Math.round(score))) };
