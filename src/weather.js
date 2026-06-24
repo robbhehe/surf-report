@@ -17,4 +17,28 @@ async function fetchTodayAirByHour() {
   return temps.slice(0, 24).map(t => (t == null ? null : Math.round(t)));
 }
 
-module.exports = { fetchTodayAirByHour };
+// Température de l'eau MESURÉE du jour à Barneville-Carteret (point côtier),
+// depuis eautemp.com. Renvoie un entier °C, ou null en cas d'échec (repli climatologie).
+async function fetchWaterTemp() {
+  const url = 'https://eautemp.com/current/france/barneville-plage-basse-normandie-france';
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'fr-FR,fr;q=0.9',
+    },
+  });
+  if (!res.ok) throw new Error(`eautemp HTTP ${res.status}`);
+  const html = await res.text();
+
+  // La valeur du jour suit la phrase "… est aujourd'hui XX°C"
+  const idx = html.indexOf("est aujourd");
+  if (idx === -1) throw new Error('eautemp: marqueur introuvable');
+  const after = html.slice(idx, idx + 300)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&deg;|&#176;/gi, '°');
+  const m = after.match(/(\d{1,2})(?:[.,]\d)?\s*°\s*C/);
+  if (!m) throw new Error('eautemp: température introuvable');
+  return parseInt(m[1], 10);
+}
+
+module.exports = { fetchTodayAirByHour, fetchWaterTemp };

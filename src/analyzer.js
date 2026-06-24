@@ -297,12 +297,13 @@ function tidesForDay(forecastDay, tidesByDay) {
   return { risingWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes) };
 }
 
-function analyzeForecasts(scrapedData, tidesByDay, airByHour) {
+function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
   const today = new Date();
   const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
   const months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
   const dateStr = `${dayNames[today.getDay()]} ${today.getDate()} ${months[today.getMonth()]}`;
-  const waterTemp = WATER_TEMP_BY_MONTH[today.getMonth()];
+  // Eau : valeur mesurée du jour (eautemp.com) si dispo, sinon climatologie mensuelle
+  const waterTemp = (typeof waterTempReal === 'number') ? waterTempReal : WATER_TEMP_BY_MONTH[today.getMonth()];
 
   // Analyse de chaque spot pour aujourd'hui
   const spotResults = scrapedData
@@ -420,7 +421,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour) {
   // Conseil combi
   if (waterTemp <= 12) report += '\n🧊 Eau froide — combi 5/4 + cagoule + chaussons.';
   else if (waterTemp <= 15) report += '\n🥶 Eau fraîche — combi 4/3 recommandée.';
-  else if (waterTemp <= 17) report += '\n👌 Eau correcte — combi 3/2 suffit.';
+  else if (waterTemp <= 18) report += '\n👌 Eau correcte — combi 3/2 suffit.';
   else report += '\n☀️ Eau agréable — shorty ou combi 2/2.';
 
   report += '\n';

@@ -4,7 +4,7 @@ const { scrapeAllSpots } = require('./src/scraper');
 const { analyzeForecasts } = require('./src/analyzer');
 const { sendReport } = require('./src/telegram');
 const { fetchTides } = require('./src/tides');
-const { fetchTodayAirByHour } = require('./src/weather');
+const { fetchTodayAirByHour, fetchWaterTemp } = require('./src/weather');
 
 // Heure actuelle à Paris (le runner GitHub est en UTC)
 function parisHour() {
@@ -40,13 +40,14 @@ if (isScheduled) {
       process.exit(1);
     }
 
-    console.log('2. Marées (maree.info) + air (open-meteo)...');
-    let tides = null, air = null;
+    console.log('2. Marées + air + eau...');
+    let tides = null, air = null, water = null;
     try { tides = await fetchTides(); } catch (e) { console.warn('   ⚠️ Marées indispo, repli Windguru:', e.message); }
     try { air = await fetchTodayAirByHour(); } catch (e) { console.warn('   ⚠️ Air indispo, repli Windguru:', e.message); }
+    try { water = await fetchWaterTemp(); } catch (e) { console.warn('   ⚠️ Eau indispo, repli climatologie:', e.message); }
 
     console.log('3. Analyse...');
-    const report = analyzeForecasts(data, tides, air);
+    const report = analyzeForecasts(data, tides, air, water);
 
     console.log('4. Envoi Telegram...');
     await sendReport(report);
