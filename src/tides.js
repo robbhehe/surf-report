@@ -83,7 +83,8 @@ function formatTides(tides) {
     .map(t => {
       const h = Math.floor(t.hour);
       const min = Math.round((t.hour - h) * 60);
-      return `${t.type} ${h}h${String(min).padStart(2, '0')}`;
+      const label = t.type === 'PM' ? 'HM' : 'BM'; // HM = Haute Mer, BM = Basse Mer
+      return `${label} ${h}h${String(min).padStart(2, '0')}`;
     })
     .join(' · ');
 }

@@ -8,8 +8,9 @@ const SPOT_ORIENTATIONS = {
   'Siouville': 270,
 };
 
-// Température de l'eau estimée par mois (Cotentin ouest, °C)
-const WATER_TEMP_BY_MONTH = [9, 9, 9, 10, 12, 14, 16, 17, 17, 15, 13, 11];
+// Température de l'eau estimée par mois (climatologie côte Ouest Cotentin, °C).
+// Plus fiable que les modèles marins libres qui déraillent près de la côte.
+const WATER_TEMP_BY_MONTH = [9, 8, 8, 10, 12, 15, 16, 17, 17, 15, 13, 10];
 
 const DAWN = 7;
 const DUSK = 21;
@@ -296,7 +297,7 @@ function tidesForDay(forecastDay, tidesByDay) {
   return { risingWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes) };
 }
 
-function analyzeForecasts(scrapedData, tidesByDay) {
+function analyzeForecasts(scrapedData, tidesByDay, airByHour) {
   const today = new Date();
   const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
   const months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
@@ -342,7 +343,17 @@ function analyzeForecasts(scrapedData, tidesByDay) {
 
   // Section 1 — Rapport du jour
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
-  const bestTemp = spotResults[0]?.windowTemp ?? '?';
+
+  // Température de l'air : Open-Meteo sur la fenêtre du meilleur spot, sinon repli Windguru
+  let bestTemp = spotResults[0]?.windowTemp ?? '?';
+  const win = spotResults[0]?.bestWindow;
+  if (Array.isArray(airByHour) && win) {
+    const hrs = [];
+    for (let h = win.start; h < win.end && h < 24; h++) {
+      if (airByHour[h] != null) hrs.push(airByHour[h]);
+    }
+    if (hrs.length) bestTemp = Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length);
+  }
   const tideDisplay = spotResults[0]?.tideInfo;
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
   report += `🌡️ Air ${bestTemp}°C | Eau ~${waterTemp}°C\n`;
