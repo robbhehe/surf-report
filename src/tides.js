@@ -43,11 +43,27 @@ async function fetchTides() {
       if (hour != null) tides.push({ hour, type: isPM ? 'PM' : 'BM' });
     }
 
-    if (tides.length) byDay.set(dayNum, tides);
+    // Coefficient(s) du jour : nombres en gras "purs" (sans h ni virgule).
+    // Le 1er entier en gras est le n° du jour ; les suivants (20-120) sont les coefs.
+    const ints = [...row.matchAll(/<b>(\d{1,3})<\/b>/g)].map(x => parseInt(x[1], 10));
+    const coefs = ints.slice(1).filter(n => n >= 20 && n <= 120);
+    const coef = coefs.length ? Math.max(...coefs) : null;
+
+    if (tides.length) byDay.set(dayNum, { tides, coef });
   }
 
   if (byDay.size === 0) throw new Error('Aucune maree parsee depuis maree.info');
   return byDay;
+}
+
+// Qualifie un coefficient de marée (impact surf/courants côte Ouest Cotentin).
+function coefQuality(coef) {
+  if (coef == null) return null;
+  if (coef < 40) return { label: 'faible (morte-eau)', tag: 'faible' };
+  if (coef <= 70) return { label: 'idéal', tag: 'ideal' };       // 40-70 : sweet spot
+  if (coef <= 85) return { label: 'fort', tag: 'fort' };
+  if (coef <= 100) return { label: 'très fort (vive-eau)', tag: 'tresfort' };
+  return { label: 'extrême (grande marée)', tag: 'extreme' };
 }
 
 // Fenêtres de marée montante : de chaque BM vers la PM suivante.
@@ -89,4 +105,4 @@ function formatTides(tides) {
     .join(' · ');
 }
 
-module.exports = { fetchTides, risingWindowsFromTides, formatTides };
+module.exports = { fetchTides, risingWindowsFromTides, formatTides, coefQuality };

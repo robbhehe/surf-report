@@ -1,5 +1,5 @@
 const { degreesToCardinal, knotsToKmh, isInRisingTide } = require('./scraper');
-const { risingWindowsFromTides, formatTides: formatRealTides } = require('./tides');
+const { risingWindowsFromTides, formatTides: formatRealTides, coefQuality } = require('./tides');
 
 const SPOT_ORIENTATIONS = {
   'Surtainville': 270,
@@ -61,6 +61,15 @@ function dangerLevel(slot) {
 
   // Vent très fort
   if (ws != null && ws > 30) danger += 1;
+
+  // Courants liés au coefficient de marée (marnage énorme du Cotentin, Raz Blanchard).
+  // Plus le coef est fort, plus les courants sont violents — aggravé par la houle.
+  const coef = slot.coef;
+  if (coef != null) {
+    if (coef >= 100) danger += 2;
+    else if (coef >= 85) danger += 1;
+    if (coef >= 90 && wh != null && wh > 1.0) danger += 1; // houle + gros coef = baïnes
+  }
 
   if (danger >= 6) return { level: 'ÉLEVÉ', emoji: '🔴', score: danger };
   if (danger >= 3) return { level: 'MODÉRÉ', emoji: '🟠', score: danger };
@@ -135,7 +144,18 @@ function scoreSlot(slot, spotOrientation) {
   // === 4. MARÉE (0 à 1) ===
   const tidePts = slot.risingTide ? 1.0 : 0.3;
 
-  let score = sizePts + periodPts + windPts + tidePts;
+  // === 5. COEFFICIENT (−0.6 à +0.8) — sweet spot 50-70 pour ces beach breaks ===
+  let coefPts = 0;
+  const coef = slot.coef;
+  if (coef != null) {
+    if (coef >= 50 && coef <= 70) coefPts = 0.8;        // idéal (bancs actifs, courants gérables)
+    else if (coef >= 40 && coef <= 80) coefPts = 0.4;   // bon
+    else if (coef > 95) coefPts = -0.6;                  // courants forts + marée trop rapide
+    else if (coef > 80) coefPts = -0.2;                  // ça pousse mais ça tire
+    else if (coef < 35) coefPts = -0.3;                  // morte-eau, peu de mouvement, bancs mous
+  }
+
+  let score = sizePts + periodPts + windPts + tidePts + coefPts;
 
   // === Malus danger ===
   const d = dangerLevel(slot);
@@ -173,15 +193,14 @@ function isPerfectSlot(slot, spotOrientation) {
   );
 }
 
-function findBestWindow(slots, spotOrientation, risingWindows) {
+function findBestWindow(slots, spotOrientation, risingWindows, coef) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
-  const scored = daySlots.map(s => ({
-    ...s,
-    risingTide: isInRisingTide(s.hour, risingWindows),
-    score: scoreSlot({ ...s, risingTide: isInRisingTide(s.hour, risingWindows) }, spotOrientation).score,
-  }));
+  const scored = daySlots.map(s => {
+    const annotated = { ...s, risingTide: isInRisingTide(s.hour, risingWindows), coef: coef ?? null };
+    return { ...annotated, score: scoreSlot(annotated, spotOrientation).score };
+  });
 
   let bestStart = 0, bestEnd = 0, bestAvg = 0;
   for (let i = 0; i < scored.length; i++) {
@@ -230,14 +249,15 @@ function formatTides(tideTimes) {
   }).join(' · ');
 }
 
-function analyzeSpotDay(slots, orientation, risingWindows) {
+function analyzeSpotDay(slots, orientation, risingWindows, coef) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
-  // Annoter chaque slot avec l'info marée montante
+  // Annoter chaque slot avec l'info marée montante + coefficient du jour
   const annotated = daySlots.map(sl => ({
     ...sl,
     risingTide: isInRisingTide(sl.hour, risingWindows),
+    coef: coef ?? null,
   }));
 
   const scored = annotated.map(sl => ({
@@ -248,7 +268,7 @@ function analyzeSpotDay(slots, orientation, risingWindows) {
   }));
 
   const avgScore = Math.round(scored.reduce((a, s) => a + s.score, 0) / scored.length);
-  const bestWindow = findBestWindow(slots, orientation, risingWindows);
+  const bestWindow = findBestWindow(slots, orientation, risingWindows, coef);
 
   // Le créneau représentatif = le meilleur DANS la fenêtre recommandée (cohérence
   // entre la note affichée et les données de vague/vent montrées).
@@ -284,17 +304,21 @@ function analyzeSpotDay(slots, orientation, risingWindows) {
 }
 
 // Récupère les marées d'un jour depuis maree.info si dispo, sinon repli sur Windguru.
-// `tidesByDay` = Map(numéro du jour -> [{hour, type}]) fournie par tides.fetchTides().
+// `tidesByDay` = Map(jour -> {tides:[{hour,type}], coef}) fournie par tides.fetchTides().
 function tidesForDay(forecastDay, tidesByDay) {
   const dayNumMatch = forecastDay.date.match(/(\d+)/);
   const dayNum = dayNumMatch ? parseInt(dayNumMatch[1], 10) : null;
-  const events = tidesByDay && dayNum != null ? tidesByDay.get(dayNum) : null;
+  const entry = tidesByDay && dayNum != null ? tidesByDay.get(dayNum) : null;
 
-  if (events && events.length) {
-    return { risingWindows: risingWindowsFromTides(events), display: formatRealTides(events) };
+  if (entry && entry.tides && entry.tides.length) {
+    return {
+      risingWindows: risingWindowsFromTides(entry.tides),
+      display: formatRealTides(entry.tides),
+      coef: entry.coef ?? null,
+    };
   }
-  // Repli : données Windguru (moins fiables sur PM/BM)
-  return { risingWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes) };
+  // Repli : données Windguru (moins fiables sur PM/BM, pas de coefficient)
+  return { risingWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes), coef: null };
 }
 
 function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
@@ -314,7 +338,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
       if (!todayForecast) return null;
 
       const dayTides = tidesForDay(todayForecast, tidesByDay);
-      const analysis = analyzeSpotDay(todayForecast.slots, orientation, dayTides.risingWindows);
+      const analysis = analyzeSpotDay(todayForecast.slots, orientation, dayTides.risingWindows, dayTides.coef);
       if (!analysis) return null;
 
       const { bestSlot, bestWindow, maxDanger, windowTemp, windowScore, isPerfect } = analysis;
@@ -335,6 +359,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
         maxDanger,
         windowTemp,
         tideInfo,
+        coef: dayTides.coef,
         allForecasts: s.data.forecasts,
         orientation,
       };
@@ -356,9 +381,12 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
     if (hrs.length) bestTemp = Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length);
   }
   const tideDisplay = spotResults[0]?.tideInfo;
+  const coef = spotResults[0]?.coef;
+  const cq = coefQuality(coef);
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
   report += `🌡️ Air ${bestTemp}°C | Eau ~${waterTemp}°C\n`;
   if (tideDisplay) report += `🌊 Marées : ${tideDisplay}\n`;
+  if (coef != null) report += `📈 Coefficient : ${coef} (${cq.label})\n`;
   report += '\n';
 
   spotResults.forEach((spot, i) => {
@@ -392,6 +420,13 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
     report += `⚠️ DANGER — Conditions dangereuses sur tous les spots. Courants forts et grosse houle, à éviter.\n`;
   } else if (dangerousSpots.length > 0) {
     report += `⚠️ Danger élevé sur ${dangerousSpots.map(s => s.name).join(', ')}. Courants forts, à éviter.\n`;
+  }
+
+  // Alerte courants liée au coefficient (Raz Blanchard, marnage Cotentin)
+  if (coef != null && coef >= 90) {
+    report += `🌀 Gros coefficient (${coef}) — courants forts et marée rapide. Prudence (Raz Blanchard à proximité), évite la marée basse.\n`;
+  } else if (coef != null && coef >= 80) {
+    report += `↪️ Coefficient ${coef} — courants marqués, reste vigilant près des bancs.\n`;
   }
 
   const moment = (w) => {
@@ -442,7 +477,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
       if (!matchDay) return;
 
       const dayTides = tidesForDay(matchDay, tidesByDay);
-      const analysis = analyzeSpotDay(matchDay.slots, orientation, dayTides.risingWindows);
+      const analysis = analyzeSpotDay(matchDay.slots, orientation, dayTides.risingWindows, dayTides.coef);
       if (!analysis) return;
 
       if (analysis.windowScore > bestScoreForDay) {
