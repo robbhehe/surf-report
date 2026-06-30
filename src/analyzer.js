@@ -303,6 +303,29 @@ function analyzeSpotDay(slots, orientation, risingWindows, coef) {
   return { avgScore, windowScore, bestSlot, bestWindow, maxDanger, windowTemp, isPerfect, daySlots: scored };
 }
 
+// Évalue, sur une plage horaire donnée, le meilleur spot et ses conditions.
+// Utilisé pour comparer les deux marées montantes du jour (matin / soir).
+function evalWindowAcrossSpots(scrapedData, wStart, wEnd, coef) {
+  let best = null;
+  for (const s of scrapedData.filter(x => x.data)) {
+    const orient = SPOT_ORIENTATIONS[s.name] || 270;
+    const today = s.data.forecasts[0];
+    if (!today) continue;
+    const slots = today.slots.filter(sl => sl.hour >= wStart && sl.hour < wEnd && isDaylight(sl.hour));
+    if (!slots.length) continue;
+    const scored = slots.map(sl => {
+      const a = { ...sl, risingTide: true, coef: coef ?? null };
+      return { ...a, score: scoreSlot(a, orient).score };
+    });
+    // Meilleur moment de la fenêtre (cohérent avec la note des spots)
+    const bestSlot = scored.reduce((b, sl) => (sl.score > b.score ? sl : b), scored[0]);
+    if (!best || bestSlot.score > best.score) {
+      best = { spotName: s.name, score: bestSlot.score, bestSlot, wt: windType(bestSlot.windDir, orient) };
+    }
+  }
+  return best;
+}
+
 // Récupère les marées d'un jour depuis maree.info si dispo, sinon repli sur Windguru.
 // `tidesByDay` = Map(jour -> {tides:[{hour,type}], coef}) fournie par tides.fetchTides().
 function tidesForDay(forecastDay, tidesByDay) {
@@ -370,21 +393,17 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
   // Section 1 — Rapport du jour
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
 
-  // Température de l'air : Open-Meteo sur la fenêtre du meilleur spot, sinon repli Windguru
+  // Température de l'air : PIC de la journée (Open-Meteo), sinon repli Windguru
   let bestTemp = spotResults[0]?.windowTemp ?? '?';
-  const win = spotResults[0]?.bestWindow;
-  if (Array.isArray(airByHour) && win) {
-    const hrs = [];
-    for (let h = win.start; h < win.end && h < 24; h++) {
-      if (airByHour[h] != null) hrs.push(airByHour[h]);
-    }
-    if (hrs.length) bestTemp = Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length);
+  if (Array.isArray(airByHour)) {
+    const daytime = airByHour.slice(7, 22).filter(t => t != null); // 7h-21h
+    if (daytime.length) bestTemp = Math.max(...daytime);
   }
   const tideDisplay = spotResults[0]?.tideInfo;
   const coef = spotResults[0]?.coef;
   const cq = coefQuality(coef);
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
-  report += `🌡️ Air ${bestTemp}°C | Eau ~${waterTemp}°C\n`;
+  report += `🌡️ Air ${bestTemp}°C (pic) | Eau ~${waterTemp}°C\n`;
   if (tideDisplay) report += `🌊 Marées : ${tideDisplay}\n`;
   if (coef != null) report += `📈 Coefficient : ${coef} (${cq.label})\n`;
   report += '\n';
@@ -409,6 +428,29 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
     }
     report += '\n';
   });
+
+  // Comparaison des DEUX marées montantes du jour (matin / soir) — pour choisir
+  // son créneau selon ses dispos, sans avoir à deviner comment le vent aura tourné.
+  const todaySample = scrapedData.find(s => s.data)?.data.forecasts[0];
+  if (todaySample) {
+    const todayTides = tidesForDay(todaySample, tidesByDay);
+    const dayRising = (todayTides.risingWindows || [])
+      .map(w => ({ start: Math.max(Math.round(w.start), DAWN), end: Math.min(Math.round(w.end), DUSK) }))
+      .filter(w => w.end - w.start >= 1);
+
+    if (dayRising.length) {
+      report += `🌊 Tes fenêtres de marée montante aujourd'hui :\n`;
+      for (const w of dayRising) {
+        const ev = evalWindowAcrossSpots(scrapedData, w.start, w.end, todayTides.coef);
+        if (!ev) continue;
+        const icon = w.start < 12 ? '🌅' : w.start < 17 ? '🏖️' : '🌇';
+        const periode = w.start < 12 ? 'Matin' : w.start < 17 ? 'Aprèm' : 'Soir';
+        const b = ev.bestSlot;
+        report += `   ${icon} ${periode} (${w.start}h-${w.end}h) → ${ev.spotName} ${b.waveHeight ?? '?'}m/${b.wavePeriod ?? '?'}s, ${degreesToCardinal(b.windDir)} ${knotsToKmh(b.windSpeed)}km/h (${ev.wt.label}) — ${ev.score}/10\n`;
+      }
+      report += '\n';
+    }
+  }
 
   // Conseil
   const best = spotResults[0];
