@@ -25,6 +25,18 @@ const SPOTS = [
     orientation: 270,  // Exposée Ouest
     offshoreDir: [45, 135],
   },
+  {
+    name: 'Vauville',
+    windguruId: 48396,
+    orientation: 250,  // Anse de Vauville, exposée WSW — capte bien les houles NO
+    offshoreDir: [25, 115],
+  },
+  {
+    name: 'Hatainville',
+    windguruId: 48400, // Même station que Surtainville (plages voisines)
+    orientation: 280,  // Ouest-Nord-Ouest
+    offshoreDir: [70, 160],
+  },
 ];
 
 module.exports = { SPOTS };

@@ -6,6 +6,8 @@ const SPOT_ORIENTATIONS = {
   'Sciotot': 280,
   'Le Rozel': 285,
   'Siouville': 270,
+  'Vauville': 250,
+  'Hatainville': 280,
 };
 
 // Température de l'eau estimée par mois (climatologie côte Ouest Cotentin, °C).
@@ -391,7 +393,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
     .sort((a, b) => b.score - a.score);
 
   // Section 1 — Rapport du jour
-  const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
+  const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
 
   // Température de l'air : PIC de la journée (Open-Meteo), sinon repli Windguru
   let bestTemp = spotResults[0]?.windowTemp ?? '?';
