@@ -10,6 +10,13 @@ const SPOT_ORIENTATIONS = {
   'Hatainville': 280,
 };
 
+// Connaissance locale que les modèles ne voient pas (bancs de sable).
+// Hatainville : bancs réputés qui creusent une houle qui paraît petite et la
+// rendent puissante — un avantage net sur les petites/moyennes houles.
+const SPOT_BANKS = {
+  'Hatainville': { bonus: 1.2, maxWave: 1.5 }, // +1.2 quand houle <= 1.5m
+};
+
 // Température de l'eau estimée par mois (climatologie côte Ouest Cotentin, °C).
 // Plus fiable que les modèles marins libres qui déraillent près de la côte.
 const WATER_TEMP_BY_MONTH = [9, 8, 8, 10, 12, 15, 16, 17, 17, 15, 13, 10];
@@ -159,6 +166,15 @@ function scoreSlot(slot, spotOrientation) {
 
   let score = sizePts + periodPts + windPts + tidePts + coefPts;
 
+  // === Bonus bancs de sable (connaissance locale) ===
+  // Ex : Hatainville creuse une petite houle là où Surtainville reste mou.
+  const bank = SPOT_BANKS[slot.spotName];
+  if (bank && wh != null && wh <= bank.maxWave) {
+    score += bank.bonus;
+    // Une vague mieux formée encaisse aussi mieux un léger onshore
+    if (windPts < 0 && windPts >= -1.5) score += 0.5;
+  }
+
   // === Malus danger ===
   const d = dangerLevel(slot);
   if (d.score >= 6) score -= 2;
@@ -195,12 +211,12 @@ function isPerfectSlot(slot, spotOrientation) {
   );
 }
 
-function findBestWindow(slots, spotOrientation, risingWindows, coef) {
+function findBestWindow(slots, spotOrientation, risingWindows, coef, spotName) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
   const scored = daySlots.map(s => {
-    const annotated = { ...s, risingTide: isInRisingTide(s.hour, risingWindows), coef: coef ?? null };
+    const annotated = { ...s, risingTide: isInRisingTide(s.hour, risingWindows), coef: coef ?? null, spotName };
     return { ...annotated, score: scoreSlot(annotated, spotOrientation).score };
   });
 
@@ -251,15 +267,16 @@ function formatTides(tideTimes) {
   }).join(' · ');
 }
 
-function analyzeSpotDay(slots, orientation, risingWindows, coef) {
+function analyzeSpotDay(slots, orientation, risingWindows, coef, spotName) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
-  // Annoter chaque slot avec l'info marée montante + coefficient du jour
+  // Annoter chaque slot avec l'info marée montante + coefficient + nom du spot
   const annotated = daySlots.map(sl => ({
     ...sl,
     risingTide: isInRisingTide(sl.hour, risingWindows),
     coef: coef ?? null,
+    spotName,
   }));
 
   const scored = annotated.map(sl => ({
@@ -270,7 +287,7 @@ function analyzeSpotDay(slots, orientation, risingWindows, coef) {
   }));
 
   const avgScore = Math.round(scored.reduce((a, s) => a + s.score, 0) / scored.length);
-  const bestWindow = findBestWindow(slots, orientation, risingWindows, coef);
+  const bestWindow = findBestWindow(slots, orientation, risingWindows, coef, spotName);
 
   // Le créneau représentatif = le meilleur DANS la fenêtre recommandée (cohérence
   // entre la note affichée et les données de vague/vent montrées).
@@ -316,7 +333,7 @@ function evalWindowAcrossSpots(scrapedData, wStart, wEnd, coef) {
     const slots = today.slots.filter(sl => sl.hour >= wStart && sl.hour < wEnd && isDaylight(sl.hour));
     if (!slots.length) continue;
     const scored = slots.map(sl => {
-      const a = { ...sl, risingTide: true, coef: coef ?? null };
+      const a = { ...sl, risingTide: true, coef: coef ?? null, spotName: s.name };
       return { ...a, score: scoreSlot(a, orient).score };
     });
     // Meilleur moment de la fenêtre (cohérent avec la note des spots)
@@ -363,7 +380,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
       if (!todayForecast) return null;
 
       const dayTides = tidesForDay(todayForecast, tidesByDay);
-      const analysis = analyzeSpotDay(todayForecast.slots, orientation, dayTides.risingWindows, dayTides.coef);
+      const analysis = analyzeSpotDay(todayForecast.slots, orientation, dayTides.risingWindows, dayTides.coef, s.name);
       if (!analysis) return null;
 
       const { bestSlot, bestWindow, maxDanger, windowTemp, windowScore, isPerfect } = analysis;
@@ -521,7 +538,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
       if (!matchDay) return;
 
       const dayTides = tidesForDay(matchDay, tidesByDay);
-      const analysis = analyzeSpotDay(matchDay.slots, orientation, dayTides.risingWindows, dayTides.coef);
+      const analysis = analyzeSpotDay(matchDay.slots, orientation, dayTides.risingWindows, dayTides.coef, s.name);
       if (!analysis) return;
 
       if (analysis.windowScore > bestScoreForDay) {
