@@ -324,8 +324,10 @@ function analyzeSpotDay(slots, orientation, risingWindows, coef, spotName) {
 
 // Évalue, sur une plage horaire donnée, le meilleur spot et ses conditions.
 // Utilisé pour comparer les deux marées montantes du jour (matin / soir).
+// Renvoie TOUS les spots classés pour cette plage horaire (pour pouvoir expliquer
+// pourquoi le n°1 bat le n°2).
 function evalWindowAcrossSpots(scrapedData, wStart, wEnd, coef) {
-  let best = null;
+  const results = [];
   for (const s of scrapedData.filter(x => x.data)) {
     const orient = SPOT_ORIENTATIONS[s.name] || 270;
     const today = s.data.forecasts[0];
@@ -336,13 +338,40 @@ function evalWindowAcrossSpots(scrapedData, wStart, wEnd, coef) {
       const a = { ...sl, risingTide: true, coef: coef ?? null, spotName: s.name };
       return { ...a, score: scoreSlot(a, orient).score };
     });
-    // Meilleur moment de la fenêtre (cohérent avec la note des spots)
     const bestSlot = scored.reduce((b, sl) => (sl.score > b.score ? sl : b), scored[0]);
-    if (!best || bestSlot.score > best.score) {
-      best = { spotName: s.name, score: bestSlot.score, bestSlot, wt: windType(bestSlot.windDir, orient) };
-    }
+    results.push({ spotName: s.name, score: bestSlot.score, bestSlot, wt: windType(bestSlot.windDir, orient), orient });
   }
-  return best;
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
+// Petit commentaire expliquant pourquoi le spot A est meilleur que le spot B aujourd'hui.
+function whyBetter(a, b) {
+  if (!b) return 'seul spot exploitable sur ce créneau.';
+  const reasons = [];
+  const wa = a.wt.label, wb = b.wt.label;
+  const rank = { offshore: 4, 'side-off': 3, side: 2, 'side-on': 1, onshore: 0, inconnu: 2 };
+  if (rank[wa] > rank[wb]) reasons.push(`vent plus favorable (${wa} vs ${wb} à ${b.spotName})`);
+  const ha = a.bestSlot.waveHeight ?? 0, hb = b.bestSlot.waveHeight ?? 0;
+  if (ha - hb >= 0.2) reasons.push('houle un peu plus consistante');
+  const pa = a.bestSlot.wavePeriod ?? 0, pb = b.bestSlot.wavePeriod ?? 0;
+  if (pa - pb >= 2) reasons.push('houle mieux ordonnée (période plus longue)');
+  if (SPOT_BANKS[a.spotName] && ha <= (SPOT_BANKS[a.spotName].maxWave)) reasons.push('bancs qui creusent mieux la houle');
+  if (reasons.length === 0) reasons.push(`conditions un cheveu meilleures qu'à ${b.spotName}`);
+  return reasons.join(', ') + '.';
+}
+
+// Explique l'impact du coefficient sur les conditions du jour.
+function coefImpact(coef, cq) {
+  if (coef == null || !cq) return null;
+  switch (cq.tag) {
+    case 'faible': return `Peu de mouvement d'eau : courants faibles, marée lente, fenêtre longue mais bancs moins alimentés.`;
+    case 'ideal': return `Bancs bien alimentés et courants gérables — le meilleur compromis pour ces spots.`;
+    case 'fort': return `Ça pousse plus fort, la marée bouge vite : courants qui se renforcent, fenêtre plus courte.`;
+    case 'tresfort':
+    case 'extreme': return `Marée très rapide et courants puissants (Raz Blanchard) : fenêtre courte, reste au pic de marée et évite la basse mer.`;
+    default: return null;
+  }
 }
 
 // Récupère les marées d'un jour depuis maree.info si dispo, sinon repli sur Windguru.
@@ -424,7 +453,11 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
   report += `🌡️ Air ${bestTemp}°C (pic) | Eau ~${waterTemp}°C\n`;
   if (tideDisplay) report += `🌊 Marées : ${tideDisplay}\n`;
-  if (coef != null) report += `📈 Coefficient : ${coef} (${cq.label})\n`;
+  if (coef != null) {
+    report += `📈 Coefficient : ${coef} (${cq.label})\n`;
+    const impact = coefImpact(coef, cq);
+    if (impact) report += `   ↳ ${impact}\n`;
+  }
   report += '\n';
 
   spotResults.forEach((spot, i) => {
@@ -458,16 +491,18 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
       .filter(w => w.end - w.start >= 1);
 
     if (dayRising.length) {
-      report += `🌊 Tes fenêtres de marée montante aujourd'hui :\n`;
+      report += `🌊 Tes 2 créneaux marée montante (choisis selon tes dispos) :\n\n`;
       for (const w of dayRising) {
-        const ev = evalWindowAcrossSpots(scrapedData, w.start, w.end, todayTides.coef);
-        if (!ev) continue;
+        const ranked = evalWindowAcrossSpots(scrapedData, w.start, w.end, todayTides.coef);
+        if (!ranked.length) continue;
+        const top = ranked[0], second = ranked[1];
         const icon = w.start < 12 ? '🌅' : w.start < 17 ? '🏖️' : '🌇';
-        const periode = w.start < 12 ? 'Matin' : w.start < 17 ? 'Aprèm' : 'Soir';
-        const b = ev.bestSlot;
-        report += `   ${icon} ${periode} (${w.start}h-${w.end}h) → ${ev.spotName} ${b.waveHeight ?? '?'}m/${b.wavePeriod ?? '?'}s, ${degreesToCardinal(b.windDir)} ${knotsToKmh(b.windSpeed)}km/h (${ev.wt.label}) — ${ev.score}/10\n`;
+        const periode = w.start < 12 ? 'MATIN' : w.start < 17 ? 'APRÈM' : 'SOIR';
+        const b = top.bestSlot;
+        report += `${icon} ${periode} — montante ${w.start}h-${w.end}h\n`;
+        report += `   👉 ${top.spotName} — ${top.score}/10 : ${b.waveHeight ?? '?'}m/${b.wavePeriod ?? '?'}s, ${degreesToCardinal(b.windDir)} ${knotsToKmh(b.windSpeed)}km/h (${top.wt.label})\n`;
+        report += `   💬 Pourquoi lui : ${whyBetter(top, second)}\n\n`;
       }
-      report += '\n';
     }
   }
 
@@ -512,6 +547,13 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
   }
   if (worst && worst.score <= 2 && worst.name !== best?.name) {
     report += ` Évite ${worst.name} (${worst.windType}).`;
+  }
+
+  // Pourquoi le n°1 devance le n°2 aujourd'hui
+  const second = spotResults[1];
+  if (best && second && best.score > second.score) {
+    const toCmp = (s) => ({ spotName: s.name, wt: { label: s.windType }, bestSlot: { waveHeight: s.waveHeight, wavePeriod: s.wavePeriod } });
+    report += `\n💬 ${best.name} > ${second.name} : ${whyBetter(toCmp(best), toCmp(second))}`;
   }
 
   // Conseil combi
