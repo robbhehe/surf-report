@@ -326,11 +326,11 @@ function analyzeSpotDay(slots, orientation, risingWindows, coef, spotName) {
 // Utilisé pour comparer les deux marées montantes du jour (matin / soir).
 // Renvoie TOUS les spots classés pour cette plage horaire (pour pouvoir expliquer
 // pourquoi le n°1 bat le n°2).
-function evalWindowAcrossSpots(scrapedData, wStart, wEnd, coef) {
+function evalWindowAcrossSpots(scrapedData, wStart, wEnd, coef, targetDayNum) {
   const results = [];
   for (const s of scrapedData.filter(x => x.data)) {
     const orient = SPOT_ORIENTATIONS[s.name] || 270;
-    const today = s.data.forecasts[0];
+    const today = pickForecast(s.data.forecasts, targetDayNum);
     if (!today) continue;
     const slots = today.slots.filter(sl => sl.hour >= wStart && sl.hour < wEnd && isDaylight(sl.hour));
     if (!slots.length) continue;
@@ -392,20 +392,31 @@ function tidesForDay(forecastDay, tidesByDay) {
   return { risingWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes), coef: null };
 }
 
-function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
-  const today = new Date();
+// Trouve le forecast d'un spot pour un jour du mois donné (ou le 1er = aujourd'hui).
+function pickForecast(forecasts, targetDayNum) {
+  if (targetDayNum == null) return forecasts[0];
+  return forecasts.find(f => {
+    const m = f.date.match(/(\d+)/);
+    return m && parseInt(m[1], 10) === targetDayNum;
+  });
+}
+
+// `target` (optionnel) = { dateObj, dayNum, offset } pour un rapport d'un jour précis.
+function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal, target) {
+  const refDate = target?.dateObj || new Date();
+  const targetDayNum = target?.dayNum ?? null;
   const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
   const months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-  const dateStr = `${dayNames[today.getDay()]} ${today.getDate()} ${months[today.getMonth()]}`;
+  const dateStr = `${dayNames[refDate.getDay()]} ${refDate.getDate()} ${months[refDate.getMonth()]}`;
   // Eau : valeur mesurée du jour (eautemp.com) si dispo, sinon climatologie mensuelle
-  const waterTemp = (typeof waterTempReal === 'number') ? waterTempReal : WATER_TEMP_BY_MONTH[today.getMonth()];
+  const waterTemp = (typeof waterTempReal === 'number') ? waterTempReal : WATER_TEMP_BY_MONTH[refDate.getMonth()];
 
-  // Analyse de chaque spot pour aujourd'hui
+  // Analyse de chaque spot pour le jour visé (aujourd'hui par défaut)
   const spotResults = scrapedData
     .filter(s => s.data)
     .map(s => {
       const orientation = SPOT_ORIENTATIONS[s.name] || 270;
-      const todayForecast = s.data.forecasts[0];
+      const todayForecast = pickForecast(s.data.forecasts, targetDayNum);
       if (!todayForecast) return null;
 
       const dayTides = tidesForDay(todayForecast, tidesByDay);
@@ -438,6 +449,10 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
     .filter(Boolean)
     .sort((a, b) => b.score - a.score);
 
+  if (spotResults.length === 0) {
+    return `🏄 Surf Report Cotentin — ${dateStr}\n\nDésolé, pas de prévision disponible pour ce jour (trop loin ou données manquantes). Windguru couvre ~7 jours.`;
+  }
+
   // Section 1 — Rapport du jour
   const medals = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
 
@@ -451,6 +466,9 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
   const coef = spotResults[0]?.coef;
   const cq = coefQuality(coef);
   let report = `🏄 Surf Report Cotentin — ${dateStr}\n`;
+  if (target && target.offset >= 2) {
+    report += `🔮 Prévision à J+${target.offset} — indicative, à reconfirmer la veille.\n`;
+  }
   report += `🌡️ Air ${bestTemp}°C (pic) | Eau ~${waterTemp}°C\n`;
   if (tideDisplay) report += `🌊 Marées : ${tideDisplay}\n`;
   if (coef != null) {
@@ -483,7 +501,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
 
   // Comparaison des DEUX marées montantes du jour (matin / soir) — pour choisir
   // son créneau selon ses dispos, sans avoir à deviner comment le vent aura tourné.
-  const todaySample = scrapedData.find(s => s.data)?.data.forecasts[0];
+  const todaySample = pickForecast(scrapedData.find(s => s.data)?.data.forecasts || [], targetDayNum);
   if (todaySample) {
     const todayTides = tidesForDay(todaySample, tidesByDay);
     const dayRising = (todayTides.risingWindows || [])
@@ -493,7 +511,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
     if (dayRising.length) {
       report += `🌊 Tes 2 créneaux marée montante (choisis selon tes dispos) :\n\n`;
       for (const w of dayRising) {
-        const ranked = evalWindowAcrossSpots(scrapedData, w.start, w.end, todayTides.coef);
+        const ranked = evalWindowAcrossSpots(scrapedData, w.start, w.end, todayTides.coef, targetDayNum);
         if (!ranked.length) continue;
         const top = ranked[0], second = ranked[1];
         const icon = w.start < 12 ? '🌅' : w.start < 17 ? '🏖️' : '🌇';
@@ -564,7 +582,11 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal) {
 
   report += '\n';
 
-  // Section 2 — Aperçu semaine
+  // Section 2 — Aperçu semaine (uniquement pour le rapport du jour, pas un jour ciblé)
+  if (targetDayNum != null) {
+    report += `\n📍 Horaires de marée : maree.info`;
+    return report;
+  }
   report += `\n📅 La semaine à venir :\n\n`;
 
   const allDayKeys = spotResults[0]?.allForecasts?.slice(1, 8) || [];

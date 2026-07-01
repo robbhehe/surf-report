@@ -7,7 +7,8 @@ const { scrapeAllSpots } = require('./src/scraper');
 const { analyzeForecasts } = require('./src/analyzer');
 const { sendReport } = require('./src/telegram');
 const { fetchTides } = require('./src/tides');
-const { fetchTodayAirByHour, fetchWaterTemp } = require('./src/weather');
+const { fetchAirByHour, fetchWaterTemp } = require('./src/weather');
+const { parseTargetDay } = require('./src/dayparse');
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ALLOWED_CHAT = String(process.env.TELEGRAM_CHAT_ID);
@@ -37,24 +38,26 @@ async function tg(method, params) {
     const now = Math.floor(Date.now() / 1000);
     const maxUpdateId = Math.max(...updates.map(u => u.update_id));
 
-    // Y a-t-il un message récent venant de toi ?
-    const hasFreshMessage = updates.some(u => {
-      const msg = u.message;
-      if (!msg) return false;
-      if (String(msg.chat.id) !== ALLOWED_CHAT) return false;
-      return (now - msg.date) <= MAX_AGE_SECONDS;
-    });
+    // Dernier message récent venant de toi (avec son texte)
+    const freshMsgs = updates
+      .map(u => u.message)
+      .filter(m => m && String(m.chat.id) === ALLOWED_CHAT && (now - m.date) <= MAX_AGE_SECONDS);
+    const lastMsg = freshMsgs[freshMsgs.length - 1];
 
     // 2. Confirmer TOUS les updates pour ne pas les retraiter au prochain passage
     await tg('getUpdates', { offset: String(maxUpdateId + 1), timeout: '0' });
 
-    if (!hasFreshMessage) {
+    if (!lastMsg) {
       console.log(`${updates.length} update(s) confirmé(s), aucun message récent à traiter.`);
       return;
     }
 
+    // Jour visé selon le texte ("jeudi", "demain"…) ; sinon aujourd'hui
+    const target = parseTargetDay(lastMsg.text || '');
+    const offset = target ? target.offset : 0;
+    console.log(`📩 Message: "${lastMsg.text}" → ${target ? 'jour J+' + offset : "aujourd'hui"}`);
+
     // 3. Générer et envoyer les prévisions
-    console.log('📩 Message récent détecté → génération des prévisions...');
     const data = await scrapeAllSpots(SPOTS);
     if (data.filter(s => s.data).length === 0) {
       console.error('Scraping échoué.');
@@ -62,9 +65,9 @@ async function tg(method, params) {
     }
     let tides = null, air = null, water = null;
     try { tides = await fetchTides(); } catch (e) { console.warn('Marées indispo, repli Windguru:', e.message); }
-    try { air = await fetchTodayAirByHour(); } catch (e) { console.warn('Air indispo, repli Windguru:', e.message); }
+    try { air = await fetchAirByHour(offset); } catch (e) { console.warn('Air indispo, repli Windguru:', e.message); }
     try { water = await fetchWaterTemp(); } catch (e) { console.warn('Eau indispo, repli climatologie:', e.message); }
-    const report = analyzeForecasts(data, tides, air, water);
+    const report = analyzeForecasts(data, tides, air, water, target);
     await sendReport(report);
     console.log('✓ Prévisions envoyées !');
   } catch (e) {
