@@ -66,6 +66,16 @@ function coefQuality(coef) {
   return { label: 'extrême (grande marée)', tag: 'extreme' };
 }
 
+// Fenêtres de surf autour de la marée haute (HM) : de `before` h avant la HM
+// à `after` h après (1h avant → un peu après la bascule). C'est le créneau
+// demandé, calé sur la marée plutôt qu'un simple "meilleur 2h".
+function tideWindowsFromTides(tides, before = 1, after = 2) {
+  if (!tides) return [];
+  return tides
+    .filter(t => t.type === 'PM')
+    .map(t => ({ start: t.hour - before, end: t.hour + after, high: t.hour }));
+}
+
 // Fenêtres de marée montante : de chaque BM vers la PM suivante.
 function risingWindowsFromTides(tides) {
   if (!tides || tides.length === 0) return [];
@@ -105,4 +115,4 @@ function formatTides(tides) {
     .join(' · ');
 }
 
-module.exports = { fetchTides, risingWindowsFromTides, formatTides, coefQuality };
+module.exports = { fetchTides, risingWindowsFromTides, tideWindowsFromTides, formatTides, coefQuality };

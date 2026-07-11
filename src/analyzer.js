@@ -1,5 +1,5 @@
 const { degreesToCardinal, knotsToKmh, isInRisingTide } = require('./scraper');
-const { risingWindowsFromTides, formatTides: formatRealTides, coefQuality } = require('./tides');
+const { risingWindowsFromTides, tideWindowsFromTides, formatTides: formatRealTides, coefQuality } = require('./tides');
 
 const SPOT_ORIENTATIONS = {
   'Surtainville': 270,
@@ -216,42 +216,30 @@ function isPerfectSlot(slot, spotOrientation) {
   );
 }
 
-function findBestWindow(slots, spotOrientation, risingWindows, coef, spotName) {
+// Meilleure fenêtre = la fenêtre de marée haute (HM-1 → HM+2) la mieux notée
+// de la journée, ramenée aux heures de jour. Plus de "meilleur 2h" flottant.
+function findBestWindow(slots, spotOrientation, tideWindows, coef, spotName) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
-  const scored = daySlots.map(s => {
-    const annotated = { ...s, risingTide: isInRisingTide(s.hour, risingWindows), coef: coef ?? null, spotName };
-    return { ...annotated, score: scoreSlot(annotated, spotOrientation).score };
-  });
+  const scoreAt = (s, inTide) => {
+    const a = { ...s, risingTide: inTide, coef: coef ?? null, spotName };
+    return scoreSlot(a, spotOrientation).score;
+  };
 
-  let bestStart = 0, bestEnd = 0, bestAvg = 0;
-  for (let i = 0; i < scored.length; i++) {
-    let sum = 0;
-    for (let j = i; j < scored.length; j++) {
-      sum += scored[j].score;
-      const count = j - i + 1;
-      const avg = sum / count;
-      if (avg > bestAvg && count >= 1) {
-        bestAvg = avg;
-        bestStart = i;
-        bestEnd = j;
-      }
+  let best = null;
+  for (const w of (tideWindows || [])) {
+    const start = Math.max(Math.round(w.start), DAWN);
+    const end = Math.min(Math.round(w.end), DUSK);
+    if (end - start < 1) continue; // fenêtre hors journée (HM de nuit)
+    const inWin = daySlots.filter(s => s.hour >= start && s.hour < end);
+    if (!inWin.length) continue;
+    const avg = inWin.reduce((acc, s) => acc + scoreAt(s, true), 0) / inWin.length;
+    if (!best || avg > best.avgScore) {
+      best = { start, end, avgScore: Math.round(avg), label: formatWindow(start, end) };
     }
   }
-
-  const windowSlots = scored.slice(bestStart, bestEnd + 1);
-  const startHour = windowSlots[0].hour;
-  const endHour = windowSlots[windowSlots.length - 1].hour;
-  const interval = daySlots.length > 1 ? daySlots[1].hour - daySlots[0].hour : 2;
-  const endDisplay = Math.min(endHour + interval, DUSK);
-
-  return {
-    start: startHour,
-    end: endDisplay,
-    avgScore: Math.round(bestAvg),
-    label: formatWindow(startHour, endDisplay),
-  };
+  return best; // peut être null si aucune HM en journée
 }
 
 function formatWindow(start, end) {
@@ -272,14 +260,14 @@ function formatTides(tideTimes) {
   }).join(' · ');
 }
 
-function analyzeSpotDay(slots, orientation, risingWindows, coef, spotName) {
+function analyzeSpotDay(slots, orientation, tideWindows, coef, spotName) {
   const daySlots = filterDaySlots(slots);
   if (daySlots.length === 0) return null;
 
-  // Annoter chaque slot avec l'info marée montante + coefficient + nom du spot
+  // Annoter chaque slot : dans la fenêtre marée haute ? + coefficient + nom du spot
   const annotated = daySlots.map(sl => ({
     ...sl,
-    risingTide: isInRisingTide(sl.hour, risingWindows),
+    risingTide: isInRisingTide(sl.hour, tideWindows),
     coef: coef ?? null,
     spotName,
   }));
@@ -292,7 +280,7 @@ function analyzeSpotDay(slots, orientation, risingWindows, coef, spotName) {
   }));
 
   const avgScore = Math.round(scored.reduce((a, s) => a + s.score, 0) / scored.length);
-  const bestWindow = findBestWindow(slots, orientation, risingWindows, coef, spotName);
+  const bestWindow = findBestWindow(slots, orientation, tideWindows, coef, spotName);
 
   // Le créneau représentatif = le meilleur DANS la fenêtre recommandée (cohérence
   // entre la note affichée et les données de vague/vent montrées).
@@ -388,13 +376,14 @@ function tidesForDay(forecastDay, tidesByDay) {
 
   if (entry && entry.tides && entry.tides.length) {
     return {
-      risingWindows: risingWindowsFromTides(entry.tides),
+      // Fenêtres calées sur la marée haute (1h avant → 2h après)
+      tideWindows: tideWindowsFromTides(entry.tides),
       display: formatRealTides(entry.tides),
       coef: entry.coef ?? null,
     };
   }
   // Repli : données Windguru (moins fiables sur PM/BM, pas de coefficient)
-  return { risingWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes), coef: null };
+  return { tideWindows: forecastDay.risingWindows || [], display: formatTides(forecastDay.tideTimes), coef: null };
 }
 
 // Trouve le forecast d'un spot pour un jour du mois donné (ou le 1er = aujourd'hui).
@@ -425,7 +414,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal, tar
       if (!todayForecast) return null;
 
       const dayTides = tidesForDay(todayForecast, tidesByDay);
-      const analysis = analyzeSpotDay(todayForecast.slots, orientation, dayTides.risingWindows, dayTides.coef, s.name);
+      const analysis = analyzeSpotDay(todayForecast.slots, orientation, dayTides.tideWindows, dayTides.coef, s.name);
       if (!analysis) return null;
 
       const { bestSlot, bestWindow, maxDanger, windowTemp, windowScore, isPerfect } = analysis;
@@ -504,25 +493,26 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal, tar
     report += '\n';
   });
 
-  // Comparaison des DEUX marées montantes du jour (matin / soir) — pour choisir
-  // son créneau selon ses dispos, sans avoir à deviner comment le vent aura tourné.
+  // Les créneaux "marée haute" du jour (1h avant HM → 2h après), pour choisir
+  // selon ses dispos. Calés sur la marée, donc les horaires bougent chaque jour.
   const todaySample = pickForecast(scrapedData.find(s => s.data)?.data.forecasts || [], targetDayNum);
   if (todaySample) {
     const todayTides = tidesForDay(todaySample, tidesByDay);
-    const dayRising = (todayTides.risingWindows || [])
-      .map(w => ({ start: Math.max(Math.round(w.start), DAWN), end: Math.min(Math.round(w.end), DUSK) }))
+    const dayWins = (todayTides.tideWindows || [])
+      .map(w => ({ start: Math.max(Math.round(w.start), DAWN), end: Math.min(Math.round(w.end), DUSK), high: w.high }))
       .filter(w => w.end - w.start >= 1);
 
-    if (dayRising.length) {
-      report += `🌊 Tes 2 créneaux marée montante (choisis selon tes dispos) :\n\n`;
-      for (const w of dayRising) {
+    if (dayWins.length) {
+      report += `🌊 Tes créneaux marée haute du jour (1h avant → 2h après HM) :\n\n`;
+      for (const w of dayWins) {
         const ranked = evalWindowAcrossSpots(scrapedData, w.start, w.end, todayTides.coef, targetDayNum);
         if (!ranked.length) continue;
         const top = ranked[0], second = ranked[1];
         const icon = w.start < 12 ? '🌅' : w.start < 17 ? '🏖️' : '🌇';
         const periode = w.start < 12 ? 'MATIN' : w.start < 17 ? 'APRÈM' : 'SOIR';
+        const hm = w.high != null ? ` (HM ~${Math.floor(w.high)}h${String(Math.round((w.high % 1) * 60)).padStart(2, '0')})` : '';
         const b = top.bestSlot;
-        report += `${icon} ${periode} — montante ${w.start}h-${w.end}h\n`;
+        report += `${icon} ${periode} — ${w.start}h-${w.end}h${hm}\n`;
         report += `   👉 ${top.spotName} — ${top.score}/10 : ${b.waveHeight ?? '?'}m/${b.wavePeriod ?? '?'}s, ${degreesToCardinal(b.windDir)} ${knotsToKmh(b.windSpeed)}km/h (${top.wt.label})\n`;
         report += `   💬 Pourquoi lui : ${whyBetter(top, second)}\n\n`;
       }
@@ -613,7 +603,7 @@ function analyzeForecasts(scrapedData, tidesByDay, airByHour, waterTempReal, tar
       if (!matchDay) return;
 
       const dayTides = tidesForDay(matchDay, tidesByDay);
-      const analysis = analyzeSpotDay(matchDay.slots, orientation, dayTides.risingWindows, dayTides.coef, s.name);
+      const analysis = analyzeSpotDay(matchDay.slots, orientation, dayTides.tideWindows, dayTides.coef, s.name);
       if (!analysis) return;
 
       if (analysis.windowScore > bestScoreForDay) {
