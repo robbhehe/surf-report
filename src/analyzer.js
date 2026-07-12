@@ -119,8 +119,9 @@ function scoreSlot(slot, spotOrientation) {
   else if (wp >= 6) periodPts = 0.6;
   else periodPts = 0;                                // clapot, vagues molles/désordonnées
 
-  // === 3. VENT (−3 à 3) — LE facteur différenciant ===
-  // Offshore léger = face lisse et tenue. Onshore = vague hachée/molle.
+  // === 3. VENT (−3.5 à 3) — LE facteur différenciant (vitesses en nœuds) ===
+  // Offshore léger = face lisse et tenue. Un vent FORT, même offshore, pince le
+  // take-off et hache la surface. Onshore = vague molle/désordonnée.
   let windPts;
   const wt = windType(wd, spotOrientation);
   if (ws == null) {
@@ -128,26 +129,28 @@ function scoreSlot(slot, spotOrientation) {
   } else if (ws <= 5) {
     windPts = 2.2;                                   // quasi nul = glassy, très bon
   } else if (wt.label === 'offshore') {
-    if (ws <= 10) windPts = 3.0;                     // offshore léger = PARFAIT
-    else if (ws <= 18) windPts = 2.0;                // offshore modéré, encore très bon
-    else if (ws <= 25) windPts = 0.8;               // offshore fort, ça tient mais ça pince
-    else windPts = -0.5;                             // offshore trop fort
+    if (ws <= 8) windPts = 3.0;                       // offshore léger = PARFAIT
+    else if (ws <= 13) windPts = 2.2;                 // offshore modéré, très bon
+    else if (ws <= 18) windPts = 1.2;                 // ça commence à pincer
+    else if (ws <= 23) windPts = 0.2;                 // fort, take-off dur
+    else windPts = -1.0;                              // trop fort
   } else if (wt.label === 'side-off') {
-    if (ws <= 12) windPts = 1.5;
-    else if (ws <= 20) windPts = 0.8;
-    else windPts = -0.5;
+    if (ws <= 10) windPts = 1.3;
+    else if (ws <= 16) windPts = 0.6;
+    else if (ws <= 22) windPts = -0.4;
+    else windPts = -1.4;
   } else if (wt.label === 'side') {
-    if (ws <= 10) windPts = 0.5;
-    else if (ws <= 18) windPts = -0.5;
-    else windPts = -1.5;
+    if (ws <= 8) windPts = 0.3;
+    else if (ws <= 15) windPts = -0.6;
+    else windPts = -1.8;
   } else if (wt.label === 'side-on') {
-    if (ws <= 10) windPts = -0.8;                    // side-on même léger = pénalité
-    else if (ws <= 18) windPts = -1.8;
+    if (ws <= 8) windPts = -0.8;                      // side-on même léger = pénalité
+    else if (ws <= 15) windPts = -1.8;
     else windPts = -3.0;
   } else { // onshore
-    if (ws <= 8) windPts = -1.5;                     // onshore léger = déjà mauvais
-    else if (ws <= 15) windPts = -2.5;
-    else windPts = -3.0;                             // blown out
+    if (ws <= 7) windPts = -1.5;                      // onshore léger = déjà mauvais
+    else if (ws <= 14) windPts = -2.5;
+    else windPts = -3.5;                              // blown out
   }
 
   // === 4. MARÉE (0 à 1) ===
@@ -165,6 +168,12 @@ function scoreSlot(slot, spotOrientation) {
   }
 
   let score = sizePts + periodPts + windPts + tidePts + coefPts;
+
+  // === Malus VENT FORT — surface hachée, peu importe la direction ===
+  if (ws != null) {
+    if (ws > 28) score -= 2;        // > ~52 km/h : mer brassée
+    else if (ws > 22) score -= 1;   // > ~40 km/h : ça clapote fort
+  }
 
   // === Bonus bancs de sable (connaissance locale) ===
   // Ex : Hatainville creuse une petite houle là où Surtainville reste mou.
@@ -196,6 +205,18 @@ function scoreSlot(slot, spotOrientation) {
   // Bancs réputés (Hatainville) : peuvent creuser une petite houle → +1.5 de plafond,
   // mais jamais de quoi crier au "belle session" sur du minuscule.
   if (bank && wh != null && wh <= bank.maxWave && cap < 10) cap += 1.5;
+
+  // === Plafond PÉRIODE — sans vraie houle longue, pas de vraies vagues ===
+  // Une courte période = mer de vent / clapot désorganisé, même si la hauteur monte.
+  let periodCap = 10;
+  if (wp != null) {
+    if (wp < 5) periodCap = 2;        // clapot pur
+    else if (wp < 6) periodCap = 3;
+    else if (wp < 7) periodCap = 4;   // mer de vent
+    else if (wp < 8) periodCap = 6;
+    else if (wp < 9) periodCap = 8;
+  }
+  cap = Math.min(cap, periodCap);
 
   score = Math.min(score, cap);
 
